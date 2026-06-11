@@ -56,9 +56,27 @@ python3 scripts/enhance_ocr.py --help  # 会自动检测缺失工具
 # 完整管道：布局检测 → 切割 → 3x放大 → OCR
 python3 scripts/enhance_ocr.py "/path/to/image.png"
 
-# 领域词典纠错
+# Trie 字典树纠错（推荐）
+python3 scripts/trie_correct.py correct /tmp/image_enhance_pipeline/results.json
+
+# 或旧版纠错
 python3 scripts/context_correct.py /tmp/image_enhance_pipeline/results.json
 ```
+
+### 学习新词
+
+```bash
+# 添加一条纠错映射
+python3 scripts/trie_correct.py learn "OCR错误" "正确文字"
+
+# 测试纠错效果
+python3 scripts/trie_correct.py search "包含OCR错误的文本"
+
+# 查看词典统计
+python3 scripts/trie_correct.py stats
+```
+
+每次学习会自动更新 `scripts/correction_dict.json`，下次使用时生效。
 
 ## 工作原理
 
@@ -75,10 +93,36 @@ python3 scripts/context_correct.py /tmp/image_enhance_pipeline/results.json
    │
    ├── 5. 按 Y 坐标合并为逻辑行
    │
-   └── 6. 领域词典纠错 → 输出结构化 JSON
+   └── 6. Trie 字典树纠错（贪心最长匹配） → 输出结构化 JSON
 ```
 
-## 领域词典自定义
+## 字典树（Trie）纠错引擎
+
+核心设计：
+
+- **Trie 存储**：所有 OCR 错误模式存入 Trie，查找复杂度 O(m)（m 为模式长度）
+- **贪心最长匹配**：从左到右扫描文本，优先匹配最长的错误模式
+- **增量学习**：每次 `learn` 自动持久化到 JSON，支持频率统计
+- **短词优化**：大部分纠错词条 2-4 个字，Trie 前缀共享节省内存
+
+### 自定义词典
+
+编辑 `scripts/correction_dict.json`（自动生成），格式：
+
+```json
+{
+  "OCR错误": {"correct": "正确文字", "freq": 3},
+  "效据": {"correct": "数据", "freq": 5}
+}
+```
+
+或通过命令行学习：
+
+```bash
+python3 scripts/trie_correct.py learn "新的错误" "正确文字"
+```
+
+### 旧版词典（兼容）
 
 编辑 `scripts/context_correct.py` 中的 `CORRECTIONS` 字典：
 
@@ -118,8 +162,10 @@ image-enhance/
 ├── SKILL.md                    # Claude Code Skill 定义
 ├── README.md                   # 本文件
 └── scripts/
-    ├── enhance_ocr.py          # 主管道脚本
-    └── context_correct.py      # 领域纠错脚本
+    ├── enhance_ocr.py          # 主管道：切割 + 放大 + OCR
+    ├── trie_correct.py         # Trie 字典树纠错引擎（推荐）
+    ├── correction_dict.json    # 持久化词典（自动更新）
+    └── context_correct.py      # 旧版纠错（兼容保留）
 ```
 
 ## License
