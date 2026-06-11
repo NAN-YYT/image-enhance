@@ -56,21 +56,24 @@ python3 scripts/enhance_ocr.py --help  # 会自动检测缺失工具
 # 完整管道：布局检测 → 切割 → 3x放大 → OCR
 python3 scripts/enhance_ocr.py "/path/to/image.png"
 
-# Trie 字典树纠错（推荐）
-python3 scripts/trie_correct.py correct /tmp/image_enhance_pipeline/results.json
+# 智能纠错（形近字 + 词表验证，推荐）
+python3 scripts/smart_correct.py correct /tmp/image_enhance_pipeline/results.json
 
-# 或旧版纠错
-python3 scripts/context_correct.py /tmp/image_enhance_pipeline/results.json
+# 或 Trie 精确匹配纠错
+python3 scripts/trie_correct.py correct /tmp/image_enhance_pipeline/results.json
 ```
 
 ### 学习新词
 
 ```bash
-# 添加一条纠错映射
-python3 scripts/trie_correct.py learn "OCR错误" "正确文字"
+# 添加一条纠错映射（同时更新 Trie 和 smart_correct）
+python3 scripts/smart_correct.py learn "OCR错误" "正确文字"
+
+# 查看某个字的形近字
+python3 scripts/smart_correct.py similar "据"
 
 # 测试纠错效果
-python3 scripts/trie_correct.py search "包含OCR错误的文本"
+python3 scripts/smart_correct.py test "包含OCR错误的文本"
 
 # 查看词典统计
 python3 scripts/trie_correct.py stats
@@ -93,49 +96,59 @@ python3 scripts/trie_correct.py stats
    │
    ├── 5. 按 Y 坐标合并为逻辑行
    │
-   └── 6. Trie 字典树纠错（贪心最长匹配） → 输出结构化 JSON
+   ├── 6. Trie 精确匹配（已知的 错→正 映射）
+   │
+   └── 7. 形近字相似度 + 词表上下文验证（处理未知错误）
 ```
 
-## 字典树（Trie）纠错引擎
+## 纠错引擎
 
-核心设计：
+### 双层架构
 
-- **Trie 存储**：所有 OCR 错误模式存入 Trie，查找复杂度 O(m)（m 为模式长度）
+| 层级 | 引擎 | 原理 | 适用场景 |
+|------|------|------|----------|
+| 第 1 层 | Trie 精确匹配 | 已知 OCR 错误模式 → 正确文字，O(m) 查找 | 见过的错误，秒级修复 |
+| 第 2 层 | 形近字 + 词表验证 | 四角码/笔画/部首相似度 → 候选字 → 必须组成已知词才替换 | 未见过的错误，智能修复 |
+
+### 形近字相似度数据
+
+来源：[yongzhuo/char-similar](https://github.com/yongzhuo/char-similar)（MIT），包含：
+
+- `char_fourangle.json` — 四角码编码（形状特征），21K+ 字
+- `char_stroke.json` — 笔画分解，21K+ 字
+- `char_component.json` — 部首/偏旁，20K+ 字
+- `char_struct.json` — 结构类型（左右、上下、包围等），20K+ 字
+
+相似度计算：四角码匹配 40% + 部首相同 25% + 结构相同 15% + 笔画交集 20%
+
+### Trie 字典树
+
 - **贪心最长匹配**：从左到右扫描文本，优先匹配最长的错误模式
 - **增量学习**：每次 `learn` 自动持久化到 JSON，支持频率统计
 - **短词优化**：大部分纠错词条 2-4 个字，Trie 前缀共享节省内存
+- **初始词典**：182 条通用 OCR 错误映射（涵盖常见中文 UI/数据类术语）
 
-### 自定义词典
+### 上下文词表
 
-编辑 `scripts/correction_dict.json`（自动生成），格式：
+`scripts/data/common_words.json` 包含 128 个高频中文词汇，覆盖：
+- 通用 UI 术语（数据、系统、管理、监测、分析……）
+- 操作动词（删除、编辑、保存、取消……）
+- 数据指标（均价、环比、趋势、预警……）
+- 技术术语（数据库、接口、采集、爬虫……）
 
-```json
-{
-  "OCR错误": {"correct": "正确文字", "freq": 3},
-  "效据": {"correct": "数据", "freq": 5}
-}
-```
+形近字纠错**必须**让候选字与左右邻字组成词表中的已知词，才会替换。这避免了纯字形相似导致的越改越错。
 
-或通过命令行学习：
+### 自定义扩展
 
 ```bash
-python3 scripts/trie_correct.py learn "新的错误" "正确文字"
+# 添加纠错映射（自动更新 Trie）
+python3 scripts/smart_correct.py learn "新的错误" "正确文字"
+
+# 扩展上下文词表 — 直接编辑 JSON 数组
+# scripts/data/common_words.json
 ```
 
-### 旧版词典（兼容）
-
-编辑 `scripts/context_correct.py` 中的 `CORRECTIONS` 字典：
-
-```python
-CORRECTIONS = {
-    "OCR误识别": "正确文字",
-    "效据": "数据",
-    "监溯": "监测",
-    # 添加你的领域术语...
-}
-```
-
-内置词典已包含农产品市场监测系统的常见术语（约 120 条映射）。
+词表越丰富，形近字纠错覆盖面越广。建议按你的业务领域添加专用词汇。
 
 ## 效果对比
 
@@ -152,20 +165,28 @@ CORRECTIONS = {
 
 - AI 生成的设计稿（文字是像素渲染非矢量）效果弱于真实 UI 截图
 - 极小字体（<6px 像素高度）即使放大后仍可能无法识别
-- 领域纠错依赖预设词典，新领域需要手动添加术语
+- 形近字纠错依赖上下文词表覆盖度，词表外的词无法触发纠错
 - 仅支持 macOS（依赖 Vision framework 和 sips）
 
 ## 文件结构
 
 ```
 image-enhance/
-├── SKILL.md                    # Claude Code Skill 定义
-├── README.md                   # 本文件
+├── SKILL.md                        # Claude Code Skill 定义
+├── README.md                       # 本文件
+├── LICENSE                         # MIT
 └── scripts/
-    ├── enhance_ocr.py          # 主管道：切割 + 放大 + OCR
-    ├── trie_correct.py         # Trie 字典树纠错引擎（推荐）
-    ├── correction_dict.json    # 持久化词典（自动更新）
-    └── context_correct.py      # 旧版纠错（兼容保留）
+    ├── enhance_ocr.py              # 主管道：切割 + 放大 + OCR
+    ├── smart_correct.py            # 智能纠错（形近字 + 词表，推荐）
+    ├── trie_correct.py             # Trie 精确匹配纠错
+    ├── context_correct.py          # 旧版纠错（兼容保留）
+    ├── correction_dict.json        # 持久化纠错词典（182条，自动学习更新）
+    └── data/
+        ├── char_fourangle.json     # 四角码字典 (21K+ chars)
+        ├── char_stroke.json        # 笔画分解字典 (21K+ chars)
+        ├── char_component.json     # 部首字典 (20K+ chars)
+        ├── char_struct.json        # 结构字典 (20K+ chars)
+        └── common_words.json       # 上下文验证词表 (128 words)
 ```
 
 ## License
