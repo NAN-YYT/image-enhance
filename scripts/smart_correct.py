@@ -92,21 +92,46 @@ class CharSimilarity:
 
         return sum(scores) if scores else 0
 
-    def find_similar(self, char, top_n=5, threshold=0.5):
-        """Find top-N visually similar characters."""
+    def find_similar(self, char, top_n=8, threshold=0.5):
+        """Find top-N visually similar characters using confusion set + fourangle."""
         if char in self._similar_cache:
             return self._similar_cache[char][:top_n]
 
         candidates = []
-        code = self.fourangle.get(char, "")
-        if code and len(code) >= 3:
-            # Only search chars with similar fourangle prefix
-            search_chars = set()
-            for prefix_len in [3, 2]:
-                prefix = code[:prefix_len]
-                search_chars.update(self._fourangle_index.get(prefix, []))
-                if len(search_chars) > 200:
-                    break
+
+        # Priority 1: Use academic confusion set (SIGHAN) — most reliable
+        confusion_index_path = os.path.join(DATA_DIR, "confusion_index.json")
+        if os.path.exists(confusion_index_path):
+            if not hasattr(self, '_confusion'):
+                with open(confusion_index_path, "r", encoding="utf-8") as f:
+                    self._confusion = json.load(f)
+            # Forward: chars this one is commonly confused with
+            for c in self._confusion.get("forward", {}).get(char, []):
+                score = 0.85  # High base score for known confusion pairs
+                candidates.append((c, score))
+            # Reverse: chars that are commonly confused as this one
+            for c in self._confusion.get("reverse", {}).get(char, []):
+                if not any(x[0] == c for x in candidates):
+                    candidates.append((c, 0.75))
+
+        # Priority 2: Fourangle similarity for chars not in confusion set
+        if len(candidates) < top_n:
+            code = self.fourangle.get(char, "")
+            if code and len(code) >= 3:
+                search_chars = set()
+                for prefix_len in [3, 2]:
+                    prefix = code[:prefix_len]
+                    search_chars.update(self._fourangle_index.get(prefix, []))
+                    if len(search_chars) > 200:
+                        break
+
+                existing = {c for c, _ in candidates}
+                for c in search_chars:
+                    if c == char or c in existing:
+                        continue
+                    score = self.similarity(char, c)
+                    if score >= threshold:
+                        candidates.append((c, score))
 
             for c in search_chars:
                 if c == char:

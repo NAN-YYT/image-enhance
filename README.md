@@ -126,7 +126,17 @@ python3 scripts/trie_correct.py stats
 - **贪心最长匹配**：从左到右扫描文本，优先匹配最长的错误模式
 - **增量学习**：每次 `learn` 自动持久化到 JSON，支持频率统计
 - **短词优化**：大部分纠错词条 2-4 个字，Trie 前缀共享节省内存
-- **初始词典**：182 条通用 OCR 错误映射（涵盖常见中文 UI/数据类术语）
+- **初始词典**：182 条 OCR 纠错映射，可通过 `learn` 命令持续扩充
+
+### 混淆集（Confusion Set）
+
+来源：[SIGHAN Chinese Spelling Check](https://github.com/sunnyqiny/Confusionset-guided-Pointer-Networks-for-Chinese-Spelling-Check)（学术标准数据集），包含：
+
+- **4,922 个常用汉字**的混淆关系
+- **38,469 对**形近字/音近字映射
+- 双向索引：正字→易错字 + 错字→正字候选
+
+这是中文拼写纠错领域的标准混淆集，源自 SIGHAN Bake-off 评测任务。相比手动维护 182 条映射，混淆集覆盖了绝大多数中文 OCR 可能出现的字形/字音混淆。
 
 ### 上下文词表
 
@@ -177,16 +187,18 @@ image-enhance/
 ├── LICENSE                         # MIT
 └── scripts/
     ├── enhance_ocr.py              # 主管道：切割 + 放大 + OCR
-    ├── smart_correct.py            # 智能纠错（形近字 + 词表，推荐）
+    ├── smart_correct.py            # 智能纠错（混淆集 + 形近字 + 词表验证）
     ├── trie_correct.py             # Trie 精确匹配纠错
     ├── context_correct.py          # 旧版纠错（兼容保留）
     ├── correction_dict.json        # 持久化纠错词典（182条，自动学习更新）
     └── data/
+        ├── confusion_set.txt       # SIGHAN 混淆集原始数据 (4922 chars)
+        ├── confusion_index.json    # 双向混淆索引 (38469 pairs)
         ├── char_fourangle.json     # 四角码字典 (21K+ chars)
         ├── char_stroke.json        # 笔画分解字典 (21K+ chars)
         ├── char_component.json     # 部首字典 (20K+ chars)
         ├── char_struct.json        # 结构字典 (20K+ chars)
-        └── common_words.json       # 上下文验证词表 (128 words)
+        └── common_words.json       # 上下文验证词表 (128 words, 可扩展)
 ```
 
 ## License
